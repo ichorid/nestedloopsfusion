@@ -17,6 +17,9 @@ using namespace llvm;
 
 STATISTIC(LoopFCounter, "Loop Fusion Transform counter :");
 
+
+
+// This pass requires simplifycfg -> loop_rotation passes to be run before it!
 namespace {
   struct LoopF : public LoopPass{
     static char ID; // Pass identification, replacement for typeid
@@ -44,76 +47,77 @@ namespace {
       return jumpBB;
     }
 
-    int GetBackedgeNum (Loop *L){
-      BasicBlock *latch = L->getLoopLatch();
-      BasicBlock *header = L->getHeader();
-      BasicBlock* Succ0 = cast<BranchInst>(latch->getTerminator())->getSuccessor(0);
-      BasicBlock* Succ1 = cast<BranchInst>(latch->getTerminator())->getSuccessor(1);
-      int BackedgeNum = ((header == Succ0) ? 0 : 1);
-      return BackedgeNum;
-    }
     bool runOnLoop(Loop *L, LPPassManager &LPM) override {
       LI = &getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
       DT = &getAnalysis<DominatorTreeWrapperPass>().getDomTree();
       auto &subLoopsVec = L->getSubLoops();
-      if((subLoopsVec.size() == 1) && (subLoopsVec[0]->getSubLoops().size() == 0)){
-        LLVMContext &Context = L->getHeader()->getContext();
-        Value *False = ConstantInt::getFalse(Context);
-        IntegerType *bool_type = Type::getInt1Ty(Context);
-        Loop *A = L;
-        Loop *B = L->getSubLoops()[0];
-        BasicBlock *A_header = A->getHeader();
-        BasicBlock *B_header = B->getHeader();
-        BasicBlock *A_latch = A->getLoopLatch();
-        BasicBlock *B_latch = B->getLoopLatch();
-        BasicBlock *A_preheader = A->getLoopPreheader();
-        const int A_BackedgeNum = GetBackedgeNum(A);
-        const int B_BackedgeNum = GetBackedgeNum(B);
+      if(!((subLoopsVec.size() == 1) && (subLoopsVec[0]->getSubLoops().size() == 0)))
+        return false;
 
-        Instruction *pi = A_preheader->getTerminator();
-        AllocaInst* ai = new AllocaInst(bool_type, "bCondState", pi);
-        new StoreInst(False, ai, pi);
-        AllocaInst* p_acond = new AllocaInst(bool_type, "aCondState", pi);
-        new StoreInst(False, p_acond, pi);
+      LLVMContext &Context = L->getHeader()->getContext();
+      Value *False = ConstantInt::getFalse(Context);
+      IntegerType *bool_type = Type::getInt1Ty(Context);
+      Loop *A = L;
+      Loop *B = L->getSubLoops()[0];
+      BasicBlock *A_header = A->getHeader();
+      BasicBlock *B_header = B->getHeader();
+      BasicBlock *A_latch = A->getLoopLatch();
+      BasicBlock *B_latch = B->getLoopLatch();
+      BasicBlock *A_preheader = A->getLoopPreheader();
 
+      // Allocate memory for B loop flag
+      Instruction *ti = A_preheader->getTerminator();
+      AllocaInst* p_bcond = new AllocaInst(bool_type, "bCondState", ti);
+      new StoreInst(False, p_bcond, ti);
 
-        // Create new header and latch for A loop
-        BasicBlock* A_newheader = SplitEdge(A_preheader, A_header, DT, LI);
-        Value* A_condval = cast<BranchInst>(A_latch->getTerminator())->getCondition();
-        new StoreInst(A_condval, p_acond, A_latch->getTerminator());
+      // FIXME: make this work for all possible cases! +case +uncond_jump
+      SmallVector<BasicBlock*, 8> ExitingBlocks;
+      A->getExitingBlocks(ExitingBlocks);
+      for (BasicBlock *ExitingBlock : ExitingBlocks)
+        if (BranchInst *BI = dyn_cast<BranchInst>(ExitingBlock->getTerminator()))
+          if (BI->isConditional())
+          {
+            BasicBlock* succ0 = BI->getSuccessor(0);
+            Loop* succ_loop0 = LI->getLoopFor(succ0);
+            // Store condition flag
+            Value* B_condval = BI->getCondition();
+            if (succ_loop0 != B)
+            {
+              BinaryOperator* notB_condval = BinaryOperator::CreateNot(B_condval, "notXcond", BI);
+              new StoreInst(notB_condval, p_bcond, BI);
+            } 
+            else
+              new StoreInst(B_condval, p_bcond, BI);
+          }
 
-        BasicBlock* A_newlatch = SplitBlock(A_latch, A_latch->getTerminator(), DT, LI);
-        A_newlatch->setName("A.newlatch");
-        A_newlatch->getTerminator()->setSuccessor(A_BackedgeNum, A_newheader);
-
-
-        // Predicate out everything starting from [A header up to B header)
-        BasicBlock* A_headershuntlatch = shuntRegion (A_newheader, B_header, ai);
-
-        // Store B condition value before jumping back to A header
-        Value* B_condval = cast<BranchInst>(B_latch->getTerminator())->getCondition();
-        new StoreInst(B_condval, ai, B_latch->getTerminator());
-        
-
-        // Load conditions
-        LoadInst* A_cond_loaded = new LoadInst(p_acond, "AcondBool", A_newlatch->getTerminator());
-        LoadInst* B_cond_loaded = new LoadInst(ai, "BcondBool", A_newlatch->getTerminator());
-        BinaryOperator* orAB = BinaryOperator::Create(Instruction::Or, A_cond_loaded, B_cond_loaded, "or.ab", A_newlatch->getTerminator());
-        cast<BranchInst>(A_newlatch->getTerminator())->setCondition(orAB);
-
-        // Predicate out everything starting from (B_latch up to A_newlatch)
-        // Due to a bug in SplitEdge we use SplitBlock instead
-        BasicBlock* A_newprelatch = SplitBlock(A_newlatch->getSinglePredecessor(), A_newlatch->getSinglePredecessor()->getTerminator(), DT, LI);
-        B_latch->getTerminator()->setSuccessor(B_BackedgeNum, A_newprelatch);
-
-        B->invalidate();
-        A->invalidate();
-
-        errs() << "LoopF: ";
-        ++LoopFCounter;
-        return true;
+      // Create new intermediate BB for shunting instrs exclusive to A
+      BasicBlock* A_shuntkey   = SplitBlock(A_header, A_header->getFirstNonPHI(), DT, LI);
+      BasicBlock* A_postheader = SplitBlock(A_shuntkey, A_shuntkey->getFirstNonPHI(), DT, LI);
+      // Shunt BBs up to B header
+      {
+        Instruction *ti = A_shuntkey->getTerminator();
+        LoadInst* li = new LoadInst(p_bcond, "condBool", ti);
+        ti->eraseFromParent();
+        BranchInst::Create(B_header, A_postheader, li, A_shuntkey);
       }
-      return false;
+      // Add new empty latch BBs on the A and B's backedges to simplify
+      // transformation process
+      BasicBlock* A_newlatch = SplitEdge (A_latch, A_header, DT, LI);
+      BasicBlock* B_newlatch = SplitEdge (B_latch, B_header, DT, LI);
+
+      // Shunt out everything after B latch to A latch, and reuse A backedge as B backedge
+      B_newlatch->getTerminator()->setSuccessor(0, A_newlatch);
+
+      // Store B condition value before jumping back to A header
+      Value* B_condval = (cast<BranchInst>(B_latch->getTerminator()))->getCondition();
+      new StoreInst(B_condval, p_bcond, B_latch->getTerminator());
+
+      B->invalidate();
+      A->invalidate();
+
+      errs() << "LoopF: ";
+      ++LoopFCounter;
+      return true;
     }
   };
 }
