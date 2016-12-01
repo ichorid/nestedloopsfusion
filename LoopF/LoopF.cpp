@@ -72,7 +72,7 @@ namespace {
 
       // FIXME: make this work for all possible cases! +case +uncond_jump
       SmallVector<BasicBlock*, 8> ExitingBlocks;
-      A->getExitingBlocks(ExitingBlocks);
+      B->getExitingBlocks(ExitingBlocks);
       for (BasicBlock *ExitingBlock : ExitingBlocks)
         if (BranchInst *BI = dyn_cast<BranchInst>(ExitingBlock->getTerminator()))
           if (BI->isConditional())
