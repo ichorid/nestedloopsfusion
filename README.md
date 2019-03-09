@@ -13,7 +13,7 @@ cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=debug -DLLVM_ENABLE_PROJECTS="clang
 
 **Build LoopF transformation pass module**
 
-After that, the pass can be compiled as follows:
+After that, the pass can be compiled as follows (assuming you're at the root of this repository):
 ```bash
 mkdir build
 cd build
@@ -84,7 +84,7 @@ InstalledDir: /home/username/local/bin
  #!/bin/bash
  /home/username/local/bin/clang-9 -cc1 .. 
  /home/username/local/bin/clang-9 -cc1 ..  -o cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc ..
- opt -load ../LoopF/build/LoopF/libLoopF.so -simplifycfg -loop-rotate -loopf cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc |opt -O3 > cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc_mod
+ opt -load ../build/LoopF/libLoopF.so -simplifycfg -loop-rotate -loopf cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc |opt -O3 > cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc_mod
  mv cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc_orig
  mv cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc_mod cudatest-cuda-nvptx64-nvidia-cuda-sm_70.bc
  /home/username/local/bin/clang-9 -cc1 .. 
