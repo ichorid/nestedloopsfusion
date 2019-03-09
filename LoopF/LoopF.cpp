@@ -55,6 +55,7 @@ namespace {
         return false;
 
       LLVMContext &Context = L->getHeader()->getContext();
+      unsigned AS = L->getHeader()->getParent()->getParent()->getDataLayout().getAllocaAddrSpace();
       Value *False = ConstantInt::getFalse(Context);
       IntegerType *bool_type = Type::getInt1Ty(Context);
       Loop *A = L;
@@ -67,7 +68,7 @@ namespace {
 
       // Allocate memory for B loop flag
       Instruction *ti = A_preheader->getTerminator();
-      AllocaInst* p_bcond = new AllocaInst(bool_type, "bCondState", ti);
+      AllocaInst* p_bcond = new AllocaInst(bool_type, AS, "bCondState", ti);
       new StoreInst(False, p_bcond, ti);
 
       // FIXME: make this work for all possible cases! +case +uncond_jump
@@ -111,9 +112,6 @@ namespace {
       // Store B condition value before jumping back to A header
       Value* B_condval = (cast<BranchInst>(B_latch->getTerminator()))->getCondition();
       new StoreInst(B_condval, p_bcond, B_latch->getTerminator());
-
-      B->invalidate();
-      A->invalidate();
 
       errs() << "LoopF: ";
       ++LoopFCounter;
