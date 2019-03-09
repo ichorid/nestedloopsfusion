@@ -1,4 +1,3 @@
-#include "cuda_error_check.cu"
 #include <stdio.h>
 #include <stdlib.h>
 // CUDA runtime
@@ -81,7 +80,6 @@ int main(int argc, char *argv[]) {
     kernel_gpu<<<num_blocks, (1 << BLOCKSIZE)>>>(D_out, seed, external_loop_iterations, zt,
             int_lfsr_cycles, repeat_times);
     cudaDeviceSynchronize();
-    CudaCheckError();
     cudaEventCreate(&stop);
     cudaEventRecord(stop, 0);
     cudaEventSynchronize(stop);
